@@ -2,7 +2,7 @@
 
 Receiving mqtt message and send rc commands based on [rc-switch](https://github.com/sui77/rc-switch)
 
-Board: ESP8266
+Board: ESP8266 / Wemos D1 mini
 
 Command Format:
 
@@ -12,4 +12,4 @@ Command Format:
 
 ## Usage
 
-Rename the `credentials.sample.h` file to `credentials.h` and enter your wifi and mqtt data
+Rename the `evn.sample.h` file to `evn.h` and enter your wifi and mqtt data

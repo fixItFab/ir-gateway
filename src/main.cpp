@@ -6,14 +6,13 @@
 #include <IRrecv.h>
 #include <IRsend.h>
 #include <IRutils.h>
-#include <credentials.h>
+#include <env.h>
+#include "ArduinoOTA.h"
 
-#define SERIAL_BAUDRATE 115200
-#define MQTT_CLIENT_ID "RC-MQTT-Gateway"
-#define MQTT_TOPIC "ghs/livingroom/ir"
-#define MQTT_TOPIC_COMMAND "ghs/livingroom/ir/command"
-#define MQTT_TOPIC_ONLINE "ghs/livingroom/ir/online"
 #define JSON_DOCUMENT_SIZE 256
+
+const String commandTopic = (String)MQTT_TOPIC + (String) "/command";
+const String onlineTopic = (String)MQTT_TOPIC + (String) "/online";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -25,8 +24,14 @@ IRsend irsend(kIrLed);
 decode_results results;
 
 void wifiSetup();
+void onWifiConnect(const WiFiEventStationModeGotIP &event);
+void onWifiDisconnect(const WiFiEventStationModeDisconnected &event);
 void mqttCallback(char *topic, byte *payload, unsigned int length);
 void mqttReconnect();
+void handleReceivedIrCodes();
+
+WiFiEventHandler wifiConnectHandler;
+WiFiEventHandler wifiDisconnectHandler;
 
 void setup()
 {
@@ -35,6 +40,13 @@ void setup()
   Serial.println();
   Serial.println();
 
+  ArduinoOTA.setHostname(DEVICE_ID);
+  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.begin();
+
+  //Register wifi event handlers
+  wifiConnectHandler = WiFi.onStationModeGotIP(onWifiConnect);
+  wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
   wifiSetup();
 
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
@@ -46,38 +58,47 @@ void setup()
 
 void loop()
 {
+  ArduinoOTA.handle();
+
   if (!mqttClient.connected())
   {
     mqttReconnect();
   }
   mqttClient.loop();
 
-  if (irrecv.decode(&results))
+  handleReceivedIrCodes();
+}
+
+void handleReceivedIrCodes()
+{
+  if (!irrecv.decode(&results))
   {
-    String jsonString = "{";
-
-    // Protocol
-    jsonString += "\"protocol\":\"";
-    jsonString += typeToString(results.decode_type, results.repeat);
-    jsonString += "\",";
-
-    // Data
-    jsonString += "\"data\":\"";
-    jsonString += uint64ToString(results.value, 16);
-    jsonString += "\",";
-
-    // BitLength
-    jsonString += "\"bitLength\":\"";
-    jsonString += results.bits;
-    jsonString += "\"";
-
-    jsonString += "}";
-
-    const char *payload = jsonString.c_str();
-
-    mqttClient.publish(MQTT_TOPIC, payload);
-    irrecv.resume(); // Receive the next value
+    return;
   }
+
+  String jsonString = "{";
+
+  // Protocol
+  jsonString += "\"protocol\":\"";
+  jsonString += typeToString(results.decode_type, results.repeat);
+  jsonString += "\",";
+
+  // Data
+  jsonString += "\"data\":\"";
+  jsonString += uint64ToString(results.value, 16);
+  jsonString += "\",";
+
+  // BitLength
+  jsonString += "\"bitLength\":\"";
+  jsonString += results.bits;
+  jsonString += "\"";
+
+  jsonString += "}";
+
+  const char *payload = jsonString.c_str();
+
+  mqttClient.publish(MQTT_TOPIC, payload);
+  irrecv.resume(); // Receive the next value
 }
 
 void mqttReconnect()
@@ -85,17 +106,17 @@ void mqttReconnect()
   while (!mqttClient.connected())
   {
     Serial.print("Attempting MQTT connection...");
-    if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS, MQTT_TOPIC_ONLINE, 1, true, "false"))
+    if (mqttClient.connect(DEVICE_ID, MQTT_USER, MQTT_PASS, onlineTopic.c_str(), 1, true, "false"))
     {
       Serial.println("Connected to mqtt server");
 
-      mqttClient.publish(MQTT_TOPIC_ONLINE, "true", true);
+      mqttClient.publish(onlineTopic.c_str(), "true", true);
 
       Serial.print("Subscribe to ");
-      Serial.print(MQTT_TOPIC_COMMAND);
+      Serial.print(commandTopic);
       Serial.println();
 
-      mqttClient.subscribe(MQTT_TOPIC_COMMAND);
+      mqttClient.subscribe(commandTopic.c_str());
     }
     else
     {
@@ -148,8 +169,9 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
 
 void wifiSetup()
 {
-  // Set WIFI module to STA mode
+  // Set WIFI module to STA mode and hostname
   WiFi.mode(WIFI_STA);
+  WiFi.hostname(DEVICE_ID);
 
   // Connect
   Serial.printf("[WIFI] Connecting to %s ", WIFI_SSID);
@@ -161,8 +183,17 @@ void wifiSetup()
     Serial.print(".");
     delay(100);
   }
-  Serial.println();
+}
 
-  // Connected!
-  Serial.printf("[WIFI] STATION Mode, SSID: %s, IP address: %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+void onWifiConnect(const WiFiEventStationModeGotIP &event)
+{
+  Serial.println();
+  Serial.printf("[WIFI] Connection successfully established. SSID: %s, IP address: %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+}
+
+void onWifiDisconnect(const WiFiEventStationModeDisconnected &event)
+{
+  Serial.println("[WIFI] Disconnected, trying to connect...");
+  WiFi.disconnect();
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
 }
